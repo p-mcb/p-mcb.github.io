@@ -1,0 +1,167 @@
+
+---
+title: "Asymptotics in Action"
+output:
+  html_notebook: default
+  html_document: default
+---
+
+Two important results in statistics are the law of large numbers and the central limit theorem. Among many other things, these theorems provide a foundation for statistical inference using linear models. This notebook takes a quick glance at inference of this type.
+
+### Law of Large Numbers
+Before jumping into the linear model, let's spend a moment with the two theorems. For an infinite sequence of iid random variables $X_i$ with mean $\mathbb{E}[X_i] = \mu < \infty$, the sample average for a sample of size $n$ is given by
+$$
+\bar{X}_n = \frac{1}{n} \sum_{i=1}^{n}X_i
+$$
+The (weak) law of large numbers states that as $n$ goes to infinity, the sample average [converges in probability](https://en.wikipedia.org/wiki/Convergence_of_random_variables#Convergence_in_probability) to the underlying mean $\mu$
+$$
+\bar{X}_n \overset{p}\to \mu
+$$
+For a demonstration of the LLN, let's simulate some data and plot the sample average and underlying mean together
+
+```{r}
+# simulate data & compute sample average
+set.seed(1809)
+n0 <- 2e3
+df <- data.frame(i = 1:n0, x = runif(n0), mu = 0.5)
+df$xbar <- cumsum(df$x)/df$i
+
+# plot sample average and underlying mean
+library(ggplot2)
+library(reshape2)
+ggplot(data = melt(df[, names(df) != 'x'], id=c('i'))) +
+  geom_line(aes(i, value, color = variable)) +
+  labs(x = 'n', y = 'mean')
+```
+
+### Central Limit Theorem
+
+Now, let's again consider the sequence of random variables $X_i$. Let the variance be $\mathbb{V}[X_i]=\sigma^2 >0$. The central limit theorem states that as $n$ goes to infinity, the (standardized and scaled) sample mean [converges in distribution](https://en.wikipedia.org/wiki/Convergence_of_random_variables#Convergence_in_distribution) to a standard Normal distribution
+$$
+\sqrt{n}\frac{\bar{X}_n - \mu}{\sigma} \overset{d} \to N(0,1)
+$$
+Again, simulation can illustrate this convergence. The following code repeatedly draws samples of size $n$, and plots the observed distribution of the sample means as prescribed in the CLT. To facilitate comparison, the plot includes the density function of the standard normal distribution
+
+```{r}
+n0 <- 1e2                           # sample size
+n1 <- 5e1                           # number of samples
+df <- data.frame(sample = rep(1:n1, each = n0), x = runif(n0*n1))
+library(plyr)
+library(dplyr)
+df <- df %>% group_by(sample) %>% summarise(xbar = mean(x))
+
+clt <- sqrt(n0)*(df$xbar-1/2)/sqrt(1/12)  # standardized and scaled means
+grid <- seq(-3, 3, 0.05)                  # for evaluating normal density
+
+ggplot() +
+  geom_histogram(aes(clt, ..density..), binwidth = 0.125) +
+  geom_line(mapping=aes(x = grid, y = dnorm(grid)), color='red') +
+  labs(x = expression(sqrt(n)((bar(X)-mu)/sigma)))
+```
+### Application to Linear Model
+Now, to illustrate just one application of these theorems, let's look at the linear regression model
+$$
+y_i = x_i'\beta+u_i
+$$
+With sample size $n$, the ordinary least squares estimator for the model parameter $\beta$ is
+$$
+\hat{\beta}_n = (X'X)^{-1}X'Y = \left(\sum_{i=1}^n x_ix_i' \right)^{-1} \sum_{i=1}^n x_iy_i 
+$$
+Under some distributional assumptions about $(x_i,u_i)$, the LLN and the CLT yield useful results about the least-squares estimator $\hat{\beta}_n$
+$$
+\hat{\beta}_n \overset{p}{\to} \beta \\
+\sqrt n (\hat{\beta}_n-\beta) \overset{d}{\to} N(0, \sigma^2Q^{-1})
+$$
+where
+$$
+\sigma^2 = \mathbb{V}[u_i | x_i] \\
+Q = \mathbb{E}[x_i x_i']
+$$
+To illustrate these results, let's stipulate a linear relationship between $y_i$ and $x_i$, simulate some data, and find $\hat{\beta}_n$ for each sample using $\texttt{lm()}$
+```{r}
+# stipulate true beta
+beta <- runif(4, min=-10, max=10)
+
+# draw regressors
+df <- data.frame(
+  sample = rep(1:n1, each = n0),
+  obs = rep(1:n0, n1),
+  x1 = rnorm(n0*n1, mean = -1),
+  x2 = rbinom(n0*n1, 1, 0.3),
+  x3 = rexp(n0*n1) )
+
+# E[xx']^-1
+q_inv <- solve(matrix(c(1,-1,0.3,1, -1,2,-0.3,-1,
+                         0.3,-0.3,0.3,0.3, 1,-1,0.3,2), 4, 4))
+
+# draw errors 
+df$u <- runif(n0*n1, -1, 1)
+u_sd <- 2/sqrt(12)
+
+# construct y
+df$y <- beta[1] + as.matrix(df[,3:5]) %*% beta[2:4] + df$u  
+
+# estimate models
+regs <- dlply(df, 'sample', function(dd) lm(y ~ x1 + x2 + x3, data = dd))
+beta_hat <- laply(regs, function(ll) summary(ll)[[4]][,1] )
+```
+After estimating the model for each sample, now we can plot the distribution of the estimated parameters. The following graph shows the estimated values for the coefficients on the first and third regressors (note that the subscripts in the axis titles refer to the regressor index, not the sample size as in the notation above).
+```{r}
+# CLT LHS
+clt <- sqrt(n0)*(t(beta_hat)-beta)
+
+ggplot(mapping = aes(x = clt[2,], y = clt[4,])) +
+  geom_density2d(aes(colour=..level..)) + 
+  geom_point() +
+  labs(x = expression(sqrt(n)(hat(beta)[1]-beta[1])),
+       y = expression(sqrt(n)(hat(beta)[3]-beta[3]))) +
+  theme(axis.title.y = element_text(angle=0, vjust = 0.5))
+```
+Based only on eyeballing it, do those estimates look normally distributed? Let's view them again with contour lines from the distribution implied by the LLN and CLT overlaid
+```{r}
+# draw bivariate normal density lines
+density <- seq(0.05, 0.95, 0.1) 
+library(ellipse)
+contours <- data.frame(ellipse(u_sd^2*matrix(q_inv[c(6,8,14,16)],2,2),
+                               level = density, npoints = 1e3*length(density)))
+contours$density <- density
+
+# plot density contours with data
+ggplot() +
+  geom_path(data = contours,
+            mapping = aes(x, y, group = density, color = density)) +
+  geom_point(mapping = aes(x = clt[2,], y = clt[4,])) +
+  labs(x = expression(sqrt(n)(hat(beta)[1]-beta[1])),
+       y = expression(sqrt(n)(hat(beta)[3]-beta[3]))) +
+  theme(axis.title.y = element_text(angle=0, vjust = 0.5))
+```
+Qualitatively, this plot looks consistent with the claim that asymptotically the estimated coefficients are normal distributed as described above
+
+Knowing the asymptotic distribution of $\hat{\beta}_n$ allows inference about the true underlying $\beta$. For example, we can in the frequentist paradigm conduct hypothesis tests and construct confidence intervals.
+
+Let's look at the following hypothesis test for each of the regressor coefficients
+$$
+H_0:\beta_i = 0 \\
+H_1:\beta_i \neq 0
+$$
+The p-values for these hypothesis tests give the probability of observing an estimated coefficient as or more extreme than that from data, provided that $H_0$ is true. As it turns out, for this simulation, in every sample, the p value is sufficiently small to reject the null hypothesis for all observed regressors
+```{r}
+p_value <- laply(regs, function(ll) summary(ll)[[4]][,4] )
+all(p_value[,2:4] < 5e-2)
+```
+Similarly, we can compute confidence intervals for the true model parameter $\beta$ for each sample. The interpretation of the $(1-\alpha)$ confidence interval is that the true $\beta$ coefficient is within the confidence interval with probability of at least $(1-\alpha)$
+```{r}
+beta_hat_se <- laply(regs, function(ll) summary(ll)[[4]][,2] )
+rowMeans( (beta > t(beta_hat - qnorm(0.975) * beta_hat_se)) * 
+            (beta < t(beta_hat + qnorm(0.975) * beta_hat_se)))
+```
+```{r}
+
+```
+
+
+
+
+
+
+
